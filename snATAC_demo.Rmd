@@ -11,32 +11,234 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## snATAC-seq demo dataset
 
+The pipeline is fully based, for now, on <https://stuartlab.org/signac/articles/pbmc_vignette> , SIgnac package, Stuart lab.\
 
-In this notebook I will try Signac package guide to analyse a Human PBMC dataset, snATACseq data, 10x Genomics. 
-
-First, dun this command to download required packages:
-
-wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_filtered_peak_bc_matrix.h5
-wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_singlecell.csv
-wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_fragments.tsv.gz
-wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_fragments.tsv.gz.tbi
-
-
-
-Initialize and match git repository:
-
-git init
-git remote add origin https://github.com/giuditta2024/snATAC-seq.git
-git branch -m master main   # rename master to main 
-
+In this notebook I will try Signac package guide to analyse a Human PBMC dataset, snATACseq data, 10x Genomics.
 
 ```{r}
 setwd("/group/soranzo/giuditta.clerici/snATAC_demo")
 ```
 
-
 ```{r}
 if (!requireNamespace("EnsDb.Hsapiens.v75", quietly = TRUE))
     BiocManager::install("EnsDb.Hsapiens.v75")
 ```
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("biovizBase")
+```
+
+```{r}
+library(Signac)
+library(Seurat)
+library(EnsDb.Hsapiens.v75)
+library(ggplot2)
+library(patchwork)
+```
+
+Signac will use 2 input files:
+
+-   Peak/Cell matrix: (like the gene expression count matrix in scRNAseq). Each row is a region of the genome (peak).
+
+-   Fragment file: full list of unique fragments across all the cells (not only the ones that maps to peaks)
+
+Create Seurat object:
+
+```{r}
+counts <- Read10X_h5(filename = "./data/atac_v1_pbmc_10k_filtered_peak_bc_matrix.h5")
+
+metadata <- read.csv(
+  file = "./data/atac_v1_pbmc_10k_singlecell.csv",
+  header = TRUE,
+  row.names = 1
+)
+
+# with counts matrix create the chromatin assay
+
+chrom_assay <- CreateChromatinAssay(
+  counts = counts,
+  sep = c(":", "-"),
+  fragments = './data/atac_v1_pbmc_10k_fragments.tsv.gz',
+  min.cells = 10,
+  min.features = 200
+)
+
+# create final Seurat object
+pbmc <- CreateSeuratObject(
+  counts = chrom_assay,
+  assay = "peaks",
+  meta.data = metadata
+)
+```
+
+```{r}
+pbmc
+```
+
+Print some additional information:
+
+```{r}
+pbmc[["peaks"]]
+```
+
+If the chromatinAssay is the active assay (like in our case) we can call granges to see the genomic ranges associated with each feature.
+
+```{r}
+granges(pbmc)
+```
+
+Add the gene annotations to the pbmc object from human genome:
+
+```{r}
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v75)
+
+# change to UCSC style since the data was mapped to hg19
+seqlevels(annotations) <- paste0('chr', seqlevels(annotations))
+genome(annotations) <- "hg19"
+```
+
+```{r}
+# add the gene information to the object
+Annotation(pbmc) <- annotations
+```
+
+### QC metrics
+
+Suggested metrics:
+
+-   **nucleosome banding pattern**: the histogram of the DNA fragment sizes should correspond to the length of DNA wrapped around a single nucleosome. You compute this score for each single cell and quantify the approximate ratio of mononucleosomal to nucleosome-free fragments (stored as *nucleosome_signal*). Nucleosome signal = ratio of mononucleosomal to nucleosome-free fragments
+-   transcriptional start site **(TSS) enrichment score**: based on the ratio of fragments centered at TSS vs fragments in TSS-flanking regions
+-   **total number of fragments in peaks**: fraction of all fragments that fall within ATAC seq peaks
+-   **fraction of fragments in peaks**: measure of sequencing depth. Cells with few reads may need to be excluded (low sequencing depth), while cells with extremely high levels may represent douplets or artefacts.
+-   **ratio reads in genomic blacklist regions**: from ENCODE project. These are regions associated with artefactial signal.
+
+The last three metrics can be obtained from CellRanger output (stored in metadata).
+
+```{r}
+# compute nucleosome signal score per cell
+pbmc <- NucleosomeSignal(object = pbmc)
+
+# compute TSS enrichment score per cell
+pbmc <- TSSEnrichment(object = pbmc, fast = FALSE)
+
+# add blacklist ratio and fraction of reads in peaks
+pbmc$pct_reads_in_peaks <- pbmc$peak_region_fragments / pbmc$passed_filters * 100
+
+pbmc$blacklist_ratio <- pbmc$blacklist_region_fragments / pbmc$peak_region_fragments
+```
+
+You can visualize these metrics:
+
+```{r}
+DensityScatter(pbmc, 
+               x = 'nCount_peaks', 
+               y = 'TSS.enrichment', 
+               log_x = TRUE, 
+               quantiles = TRUE)
+```
+
+Plot TSS enrichment signal for different groups of cells using TSSPlot:
+
+```{r}
+# decide you threshold
+threshold <- 3
+
+pbmc$high.tss <- ifelse(pbmc$TSS.enrichment > threshold, 'High', 'Low')
+
+TSSPlot(pbmc, group.by = 'high.tss') + NoLegend()
+```
+
+Check the fragment length periodicity for all the cells and group by cells with high or low nucleosomal signal strength.
+
+Cells that are outliers based on the TSS enrichment score (that gives you similar information to the mononucleosomal / nucleosome-free ratio) - see plot above, right part - have also a different nucleosomal banding pattern (see plot below).
+
+```{r}
+pbmc$nucleosome_group <- ifelse(pbmc$nucleosome_signal > 4, 'NS > 4', 'NS < 4')
+FragmentHistogram(object = pbmc, group.by = 'nucleosome_group')
+```
+
+Indeed, you see that the distribution of the fragment length is different between cells with a nucleosome signal \> 4 and the others:
+
+-   on the left, cells with low NS (they have more free DNA than nucleosomal bound DNA): the highest peak is not the one at 200 bp
+
+-   on the right, cells with high NS (more nucleosomal DNA and less free)
+
+> Note:
+>
+> The nucleosomal DNA or free DNA is defined according to the length of the fragment (usually DNA bound to nucleosomes is of 147-200 bp in length)
+
+
+Plot the distribution of each QC metric separately: 
+
+```{r}
+VlnPlot(
+  object = pbmc,
+  features = c('nCount_peaks', 'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal', 'pct_reads_in_peaks'),
+  pt.size = 0.09,
+  ncol = 5
+)
+```
+
+
+
+
+Finally, remove cells outliers for these QC metrics: 
+
+```{r}
+# hard thresholds
+min_nCounts_peaks <- 3000
+max_nCounts_peaks <- 30000
+min_pct_reads_in_peaks <- 15
+blackl_ratio_threshold <- 0.05
+max_nucleosome_signal <- 4
+min_TSS_enrichment <- 3
+```
+
+
+```{r}
+pbmc <- subset(
+  x = pbmc,
+  subset = nCount_peaks > min_nCounts_peaks &
+    nCount_peaks < max_nCounts_peaks &
+    pct_reads_in_peaks > min_pct_reads_in_peaks &
+    blacklist_ratio < blackl_ratio_threshold &
+    nucleosome_signal < max_nucleosome_signal &
+    TSS.enrichment > min_TSS_enrichment
+)
+pbmc
+```
+
+
+
+
+
+### Some additional clarifications
+
+**Fragment Length Periodicity** Characteristic pattern of DNA fragment lengths generated by the ATAC-seq assay. This pattern arises due to the preferential cleavage of DNA by the Tn5 transposase used in the ATAC-seq protocol. Nucleosome-protected regions tend to produce shorter fragments, while nucleosome-free regions produce longer fragments.
+
+The periodicity of fragment lengths is determined by the spacing between nucleosomes, as well as the positioning of the enzymatic cleavage sites relative to the nucleosome-bound DNA.
+
+In ATAC-seq data, the fragment length periodicity typically manifests as a series of peaks in a histogram of fragment sizes, with peaks occurring at multiples of \~150-200 base pairs. This corresponds to the length of DNA wrapped around a single nucleosome core particle. The periodicity reflects the repeating pattern of nucleosome-bound DNA regions, interspersed with nucleosome-free regions.
+
+It allows researchers to infer the positions and spacing of nucleosomes along the DNA sequence, as well as to identify regions of open chromatin and nucleosome occupancy. Additionally, changes in fragment length periodicity may indicate alterations in chromatin structure or nucleosome positioning under different biological conditions or in response to stimuli.
+
+Grouping Cells by **Nucleosomal Signal Strength**: By examining the fragment length periodicity across all cells, you can identify cells with high or low nucleosomal signal strength. Cells with *high nucleosomal signal strength may exhibit strong periodic patterns* corresponding to well-positioned nucleosomes, while cells with low nucleosomal signal strength may lack clear periodicity, indicating poor nucleosome organization or low-quality data.
+
+Identifying Outliers: Cells that deviate significantly from the expected nucleosomal banding patterns may be considered outliers. For example, cells with an unusual mononucleosomal/nucleosome-free ratio or aberrant fragment length distributions may indicate experimental artifacts or biological differences.
+
+Interpreting Patterns: Cells with typical fragment length periodicity patterns are indicative of successful ATAC-seq experiments, suggesting robust chromatin accessibility profiles and well-defined nucleosome positions. In contrast, cells with atypical patterns may require further investigation to determine the cause of the aberrant signal, such as technical artifacts or biological variability.
+
+To perform this analysis:
+
+Calculate fragment length distributions for each cell's ATAC-seq data. Assess the periodicity of fragment lengths using methods such as Fourier transform analysis or autocorrelation. Group cells based on nucleosomal signal strength or other relevant metrics, such as the mononucleosomal/nucleosome-free ratio. Visualize the fragment length periodicity patterns for each group of cells to identify outliers and assess overall data quality. Interpret the results in the context of experimental conditions and biological hypotheses. Overall, analyzing fragment length periodicity in ATAC-seq data can provide valuable insights into chromatin structure and function, helping to elucidate regulatory mechanisms and identify aberrant signals that may require further investigation.
+
+
+
+
+### Normalization and dimensionality reduction 
+
 
