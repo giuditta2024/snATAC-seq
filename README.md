@@ -15,13 +15,26 @@ Remember to add the folder data/ to the .gitignore file.
 
 Then, download the required data:
 
-
 ```{code}
 sh download_data.sh
 
 # move them in the data folder
 mv atac*.* data/
 ```
+
+## Analysis in R
+
+Refer to the Rmd.
+
+> **Warning:** 
+> *To be updated*
+
+
+## Analysis in Python 
+
+I will follow a couple of tutorials: 
+- [Single Cell best practices](https://www.sc-best-practices.org/chromatin_accessibility/introduction.html)
+- [EpiScanpy documentation](https://episcanpy.readthedocs.io/en/latest/examples.html)
 
 
 
