@@ -11,33 +11,32 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## snATAC-seq demo dataset
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+In this notebook I will try Signac package guide to analyse a Human PBMC dataset, snATACseq data, 10x Genomics. 
 
-```{r cars}
-```
+First, dun this command to download required packages:
 
+wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_filtered_peak_bc_matrix.h5
+wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_singlecell.csv
+wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_fragments.tsv.gz
+wget https://cf.10xgenomics.com/samples/cell-atac/1.0.1/atac_v1_pbmc_10k/atac_v1_pbmc_10k_fragments.tsv.gz.tbi
+
+
+
+Initialize and match git repository:
+
+git init
+git remote add origin https://github.com/giuditta2024/snATAC-seq.git
+git branch -m master main   # rename master to main 
 
 
 ```{r}
 setwd("/group/soranzo/giuditta.clerici/snATAC_demo")
 ```
 
-```{r cars}
-summary(cars)
+
+```{r}
+if (!requireNamespace("EnsDb.Hsapiens.v75", quietly = TRUE))
+    BiocManager::install("EnsDb.Hsapiens.v75")
 ```
 
-
-```{r cars}
-```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
